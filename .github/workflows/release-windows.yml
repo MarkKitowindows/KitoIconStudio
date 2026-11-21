@@ -1,0 +1,90 @@
+name: Build and publish Kito Icon Studio for Windows
+
+on:
+  push:
+    branches:
+      - master
+    paths:
+      - '.github/workflows/release-windows.yml'
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: 'Release version (for example v0.2.3-beta)'
+        required: true
+        default: 'v0.2.3-beta'
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: Build Windows x64 self-contained release
+    runs-on: windows-latest
+    env:
+      RELEASE_TAG: ${{ github.event.inputs.release_tag || 'v0.2.3-beta' }}
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Install .NET 10 SDK
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Publish Windows application with bundled .NET
+        shell: pwsh
+        run: |
+          dotnet publish ./KitoIconStudio/KitoIconStudio.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -p:DebugType=None -p:DebugSymbols=false -o ./publish
+          if ($LASTEXITCODE -ne 0) { throw "dotnet publish failed" }
+          if (-not (Test-Path ./publish/KitoIconStudio.exe)) { throw "The application executable is missing" }
+
+      - name: Make downloadable ZIP
+        shell: pwsh
+        run: |
+          New-Item -Path "./release" -ItemType Directory -Force | Out-Null
+          Copy-Item "./publish/KitoIconStudio.exe" "./release/KitoIconStudio.exe"
+          Copy-Item "./LICENSE.txt" "./release/LICENSE.txt"
+          @'
+          Kito Icon Studio - Windows x64
+
+          1. Extract this ZIP to a folder.
+          2. Double-click KitoIconStudio.exe.
+
+          The .NET runtime is bundled. Visual Studio is not needed.
+          This is a beta release without a code-signing certificate.
+
+          ---
+          Kito Icon Studio - Windows x64
+
+          1. Распакуйте ZIP в папку.
+          2. Запустите KitoIconStudio.exe.
+
+          .NET уже включён в сборку. Visual Studio не нужна.
+          Это бета-версия без цифровой подписи издателя.
+          '@ | Set-Content "./release/START_HERE.txt" -Encoding utf8
+          $archive = "KitoIconStudio-$env:RELEASE_TAG-win-x64.zip"
+          Compress-Archive -Path "./release/*" -DestinationPath "./$archive" -Force
+          "RELEASE_ARCHIVE=$archive" >> $env:GITHUB_ENV
+
+      - name: Publish GitHub prerelease
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          @'
+          ## Kito Icon Studio — beta for Windows x64
+
+          - Pixel drawing tools, shapes and fill
+          - Layers and color selection
+          - Inline color picker
+          - PNG and ICO export
+          - Russian and English UI
+          - Menu and startup fixes from v0.2.3
+
+          **Download:** Choose the Windows x64 ZIP in Assets, extract it and run `KitoIconStudio.exe`.
+
+          The .NET runtime is included, so Visual Studio and a separate .NET installation are not needed. This beta is not digitally signed.
+          '@ | Set-Content "./RELEASE_NOTES.md" -Encoding utf8
+          gh release create "$env:RELEASE_TAG" "./$env:RELEASE_ARCHIVE" --repo "$env:GITHUB_REPOSITORY" --title "Kito Icon Studio $env:RELEASE_TAG" --notes-file "./RELEASE_NOTES.md" --target "$env:GITHUB_SHA" --prerelease
+          if ($LASTEXITCODE -ne 0) { throw "GitHub release creation failed" }
